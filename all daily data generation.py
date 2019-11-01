@@ -26,117 +26,104 @@ def add_columns(data,stockname):
     # add stock name column
     data['stock'] = stockname
 
+    num = len(data)
     # remove first row and change str to float
-    data = data.iloc[1:, :]
+    #data = data.iloc[1:, :]
     data['close'] = data['close'].astype(float)
     data['open'] = data['open'].astype(float)
     data['high'] = data['high'].astype(float)
     data['low'] = data['low'].astype(float)
 
     # add daily profit column
-    closes = data['close'][1:]
-    previous_closes = closes.shift(1)[1:]
-
+    closes = data['close']
+    previous_closes = closes.shift(1)
     # this last day profit is actually next day profit
-    data['last day profit'] = (closes[1:] - previous_closes[1:]) / previous_closes[1:]
-
+    data['today profit'] = (closes - previous_closes) / previous_closes
     # next day profit
-    data['next day profit'] = data['last day profit'].shift(-1)
-
+    data['next day profit'] = data['today profit'].shift(-1)
     # add next day price
     data['next day open'] = data['open'].shift(-1)
     data['next day high'] = data['high'].shift(-1)
     data['next day low'] = data['low'].shift(-1)
 
 
-    # add indicator recent 9 days highest, lowest, max volume
-    data['prev 9 days high'] = data['high'].shift(1).rolling(9).max()
-    #data['prev 9 days low'] = data['low'].shift(1).rolling(9).min()
-    data['prev 9 days max vol'] = data['volume'].shift(1).rolling(9).max()
+    # add indicator whether short peiod maximum price
+    highs = data['high']
+    maxhigh = [0] * num
+    maxhigh_indexs = []
+    for i in range(6,num-6):
+        if highs[i] == max(highs[i-5:i+5]):
+            maxhigh[i] = 1
+            maxhigh_indexs.append(i)
+    data['maxhigh'] = maxhigh
 
-    # add indicator whether close > prev 9 days highest, Yes - 1, No - 0
-    data['above 10 days high'] =  (data['close'] > data['prev 9 days high'])
+    # add indicator whether close over max high
+    overs = [0] * num
+    over_maxhigh = [0] * num
+    for i in range(0,len(maxhigh_indexs)-1):
+        start_maxhigh = maxhigh_indexs[i]
+        end_maxhigh = maxhigh_indexs[i+1]
+        for j in range(start_maxhigh+1,end_maxhigh):
+            if closes[j] > highs[start_maxhigh]:
+                if data['today profit'][j] < 0.97:
+                    overs[j] = 1
+                    over_maxhigh[i] = highs[start_maxhigh]
+                break
+    data['over'] = overs
+    data['over maxhigh'] = over_maxhigh
 
-    # add indicator whether volume > prev 9 days max volume, Yes - 1, No - 0
-    data['above 10 days max vol'] =  (data['volume'] > data['prev 9 days max vol'])
+    # add indicator whether there is bigger vol before over day vol
+    vols = data['volume']
+    opens = data['open']
+    bigvol_before = [0] * num
+    buy = [0] * num
+    for i in range(0,num-1):
+        if overs[i] == 1:
+            bigvol = vols[i]
+            for j in range(i-1,i-5,-1):
+                if data['today profit'][j] > 0:
+                    if vols[j] > bigvol:
+                        bigvol = vols[j]
+                else:
+                    break
+            if bigvol > vols[i]:
+                bigvol_before[i] = 1
+                buy[i] = opens[i+1]
+    data['bigvol before'] = bigvol_before
+    data['buy'] = buy
 
-    # add indicator whether close < prev 9 days lowest
-    #data['below 10 days low'] = (data['close'] < data['prev 9 days low'])
-
-    # add ma200 line
-    #data['ma200'] = data['close'].rolling(200).mean()
-    # add indicator whether price above 200 ave line
-    #data['above ma200'] = data['close'] > data['ma200']
+    # add indicator sell
+    sell = [0] * num
+    for i in range(5,num-1):
+        if data['buy'][i] > 0:
+            for j in range(i+1,num-1):
+                if (vols[j] > data['bigvol before'][j] or closes[j] < data['over maxhigh'][j]) and data['next day profit'][j] > -0.96:
+                    sell[j+1] = opens[j+1]
+                    break
+    data['sell'] = sell
 
     # change all true to 1, false to 0
     data = boolean_to_int(data)
 
-    # add indicator whether first time being highest/lowest close in 10 days
-    data['1st time being 10 days high'] = ((data['above 10 days high'] * data['above 10 days high'].rolling(5).sum()) == 1)
-    #data['1st time being 10 days low'] = ((data['below 10 days low'] * data['below 10 days low'].rolling(5).sum()) == 1)
-
-
-    # add indicator previous history maximum value and whether today is the highest price
-    highests = [data['high'][0]]
-    is_highest = [1]
-    is_close_highest = [1]
-    for i in range(1,len(data['high'])):
-        high = data['high'][i]
-        close = data['close'][i]
-        if close > highests[-1]:
-            is_close_highest.append(1)
-        else:
-            is_close_highest.append(0)
-        if high > highests[-1]:
-            highests.append(high)
-            is_highest.append(1)
-        else:
-            highests.append((highests[-1]))
-            is_highest.append(0)
-    data['history highest'] = highests
-    data['is highest'] = is_highest
-    data['is close highest'] = is_close_highest
-    
-
-    data = boolean_to_int(data)
-
-    # add indicator total increase or decrease = sum of 1*above 10 days high and -1*below 10 days high
-    #data['total increase or decrease'] = (data['1st time being 10 days high'] * 1 + data['1st time being 10 days low'] * -1).cumsum()
-
-    # add column 'whether trading'
-    data['trading'] = np.where(data['volume'].isnull(), '0', '1')
-
-    all_data = pd.read_csv(
-        '/Users/clienttest/Documents/Christine/projects/history highest price strategy/all daily data.csv')
-
-    data = data[data['is close highest'] == 1]
-    print(len(data))
-#    data = data[data['1st time being 10 days high'] == 1]
-#    print(len(data))
-#    data = data[data['above 10 days max vol'] == 1]
-#    print(len(data))
-
-# remove next day when stock can not be bought
-#    data = data[data['next day high'] != data['next day low']]
+    data = data[(data['buy'] > 0) | (data['sell'] > 0)]
 
     return data
 
-#all_data = pd.DataFrame(columns=['date', 'open', 'high', 'low', 'close', 'volume', 'turnover','stock',
-#                                 'last day profit','trading','trading days','next day profit'])
-all_data = pd.read_csv('/Users/clienttest/Documents/Christine/projects/history highest price strategy/all daily data.csv',\
-                       header=0,index_col=0)
-del all_data['date']
-all_data.rename(columns = {all_data.columns[0]:'date'},inplace=True)
-all_data.set_index('date')
+all_data = pd.DataFrame()
+#all_data = pd.read_csv('/Users/clienttest/Documents/Christine/projects/big vol before tp strategy/all daily data.csv',\
+#                       header=0,index_col=0)
+#del all_data['date']
+#all_data.rename(columns = {all_data.columns[0]:'date'},inplace=True)
+#all_data.set_index('date')
 
 dir = '/Users/clienttest/Documents/Christine/projects/data files/downloaded stock data/1014 daily/'
 files = os.listdir(dir)
 
 for f in files:
     # 600177
-    #if int(f[3:9]) > 600400:
-    #if f[3] != '3' and f[3] != '9':
-    if f[3] == '0':
+    #if int(f[3:9]) == 600400:
+    if f[3] != '3' and f[3] != '9':
+    #if f[3] == '0':
         data = pd.read_table(dir + f,
                              encoding='gb2312', header=None, names=['date', 'open', 'high', 'low', 'close', 'volume','turnover'])
         data = data.iloc[2:-1, :]
@@ -167,23 +154,12 @@ for f in files:
         # create new daily file with more columns
         #data.to_csv('/Users/clienttest/Documents/Christine/projects/data files/stocks daily data with indicators/' + f[3:9] +'_alldata.csv')
 
-        ''' 
-        # investigate indicator and price
-        plt.subplot(2,1,1)
-        plt.plot(data['close'])
-        plt.subplot(2,1,2)
-        plt.plot(data['total increase or decrease'])
-        plt.savefig('/Users/clienttest/Documents/Christine/projects/data files/images/' + f[3:9] + '.png')
-        plt.close('all')
-        '''
 
         # merge all_data with data1, create daily file merged by all files
         all_data = pd.concat([all_data,data])
         print(f+ ' done')
         print(len(data),len(all_data))
-        all_data.to_csv('/Users/clienttest/Documents/Christine/projects/history highest price strategy/all daily data.csv')
-
-print(all_data)
+        all_data.to_csv('/Users/clienttest/Documents/Christine/projects/big vol before tp strategy/all daily data.csv')
 
 
 
